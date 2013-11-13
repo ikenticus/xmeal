@@ -46,7 +46,7 @@ SQL>
 
 $ sudo cp /opt/local/etc/odbc.ini /etc/odbc.ini
 $ sudo cp /opt/local/etc/odbcinst.ini /etc/odbcinst.ini
-$ pip install pyodbc lxml requests
+$ pip install pyodbc lxml requests futures
 $ python
 ```
 ActivePython 2.7.5.6 (ActiveState Software Inc.) based on
@@ -61,8 +61,6 @@ Type "help", "copyright", "credits" or "license" for more information.
 <pyodbc.Cursor object at 0x107293150>
 >>> cur.fetchone()
 (2008, 'l.mlb.com', 'c.american', 'd.alcentral', 'AL', 'American', 1, 'AL Central', 'AL Central', 2)
->>> cur.fetchall()
-[(2008, 'l.mlb.com', 'c.american', 'd.alwest', 'AL', 'American', 1, 'AL West', 'AL West', 3), (2008, 'l.mlb.com', 'c.national', 'd.nlcentral', 'NL', 'National', 2, 'NL Central', 'NL Central', 5), (2008, 'l.mlb.com', 'c.national', 'd.nleast', 'NL', 'National', 2, 'NL East', 'NL East', 4), (2008, 'l.mlb.com', 'c.national', 'd.nlwest', 'NL', 'National', 2, 'NL West', 'NL West', 6), (2008, 'l.mlsnet.com', 'c.mls', 'd.eastern', 'MLS', 'MLS', None, 'Eastern', 'Eastern', None), (2008, 'l.mlsnet.com', 'c.mls', 'd.western', 'MLS', 'MLS', None, 'Western', 'Western', None), (2008, 'l.nba.com', 'c.eastern', 'd.atlantic', 'Eastern', 'Eastern', 1, 'Atlantic', 'Atlantic', 1), (2008, 'l.nba.com', 'c.eastern', 'd.central', 'Eastern', 'Eastern', 1, 'Central', 'Central', 2)]
 
 >>> import requests
 >>> requests.get('http://www.google.com')
@@ -74,6 +72,17 @@ Type "help", "copyright", "credits" or "license" for more information.
 {'name': 'value'}
 >>> root.xpath('node/@name')
 ['value']
+
+>>> import futures
+>>> def run(x): return x*x
+...
+>>> p = []
+>>> with futures.ThreadPoolExecutor(max_workers = 20) as e:
+...   for r in range(20):
+...     p.append(e.submit(run, r))
+...
+>>> [ p.result() for p in p ]
+[0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225, 256, 289, 324, 361]
 
 >>> ^D
 ```

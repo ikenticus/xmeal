@@ -8,10 +8,10 @@ import os
 import re
 import sys
 import base64
+import futures
 import requests
 import ConfigParser
 from lxml import etree
-from concurrent import futures
 from datetime import datetime, timedelta
 
 
