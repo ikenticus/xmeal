@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 class Ingestor:
     def __init__(self, args):
         self.cmd = os.path.basename(args[0])
+        self.debug = False
+        self.start = {}
 
         # retrieve conf file using current script name
         cfdir = os.path.dirname(args[0])
@@ -29,8 +31,8 @@ class Ingestor:
             # Read from configuration file
             self.config = ConfigParser.ConfigParser()
             self.config.read(cfname)
-            for s in self.config.options('global'):
-                setattr(self, s, self.config.get('global', s))
+            for s in self.config.options('settings'):
+                setattr(self, s, self.config.get('settings', s))
         else:
             sys.stderr.write('Config file [%s] not found!\n' % cfname)
             sys.exit(2)
@@ -64,7 +66,8 @@ class Ingestor:
 
     def get_files(self, feed, data):
         for file in self.get_list(data, self.config.get('settings', 'list')):
-            sys.stderr.write('Saving %s...\n' % file)
+            if self.debug:
+                sys.stderr.write('Saving %s\n' % file)
             with open('%s%s/%s' % (self.tempdir, feed, os.path.basename(file)), 'wb') as handle:
                 for block in self.get_site(self.config, stream=file).iter_content(1024):
                     if not block:
@@ -72,23 +75,58 @@ class Ingestor:
                     handle.write(block)
 
 
+    def write_last(self, feed):
+        if feed in self.start:
+            file = open('last_'+feed, 'w')
+            file.write(self.start[feed])
+            file.close()
+
+
     def retrieve_files(self, feed):
         self.config.read('%sfeeds/%s.cf' % (self.conf, feed))
         if not os.path.isdir('%s/%s' % (self.tempdir, feed)):
             os.makedirs('%s/%s' % (self.tempdir, feed))
         if os.path.isfile('last_'+feed):
-            last = open('last_'+feed)
+            last = open('last_'+feed).read()
         else:
-            last = (datetime.now() - timedelta(hours=1)).strftime(self.config.get('settings', 'last'))
+            last_default = [self.config.get('settings', 'last_default').split()[:2]]
+            last_dict = dict((fmt,float(amt)) for amt,fmt in last_default)
+            last = (datetime.now() - timedelta(**last_dict)).strftime(self.config.get('settings', 'last'))
+        self.start[feed] = datetime.now().strftime(self.config.get('settings', 'last'))
         self.get_files(feed, self.get_site(self.config, last).text)
+
+
+    def get_classes(self, feed, extra=False):
+        classes = self.config.get('settings', self.config.get('settings', 'classify')).split(',')
+        if extra:
+            classes.extend(['skipped', 'failed'])
+        return classes
+
+
+    def get_xpath_safe(self, root, xpath):
+        try:
+            return root.xpath(xpath)[0]
+        except:
+            return None
+
+
+    def get_xpath_check(self, root, xpaths):
+        value = None
+        if ',' in xpaths:
+            for xpath in xpaths.split(','):
+                value = self.get_xpath_safe(root, xpath)
+                if value:
+                    break
+        else:
+            value = self.get_xpath_safe(root, xpaths)
+        return value
 
 
     def bucket_files(self, feed):
         feedpath = self.tempdir + feed + '/'
         self.config.read('%sfeeds/%s.cf' % (self.conf, feed))
 
-        classes = self.config.get('settings', self.config.get('settings', 'classify')).split(',')
-        classes.append('skipped')
+        classes = self.get_classes(feed, extra=True)
         for c in classes:
             if not os.path.isdir(feedpath + c):
                 os.makedirs(feedpath + c) 
@@ -101,17 +139,54 @@ class Ingestor:
                 os.remove(fullpath)
             else:
                 root = etree.parse(fullpath)
-                category = root.xpath(self.config.get('settings', 'xpath'))[0]
-                sys.stderr.write('Categorizing %s...\n' % file)
-                if category in classes:
-                    os.rename(fullpath, feedpath + category + '/' + file)
+                cls = self.get_xpath_check(root, self.config.get('settings', 'xpath'))
+                if self.debug:
+                    sys.stderr.write('Classifying %s\n' % file)
+                if cls in classes:
+                    os.rename(fullpath, feedpath + cls + '/' + file)
                 else:
                     os.rename(fullpath, feedpath + 'skipped/' + file)
-                    
+
+
+    def failure_check(self, value, file, desc='unknown'):
+        if 'fail' in self.config.options('settings'):
+            for fail in self.config.get('settings', 'fail').split(','):
+                if value and fail in value:
+                    if self.debug:
+                        sys.stderr.write('Failed %s check: %s\n' % (desc, file))
+                    os.rename(file, '%s%s/failed/%s' % (self.tempdir,
+                        file.replace(self.tempdir, '').split('/')[0], os.path.basename(file)))
+
+
+    def parse_class(self, cls, feedpath, clspath):
+        conf = '%s%s/%s.cf' % (self.conf, clspath, cls)
+        if os.path.isfile(conf):
+            self.config.read(conf)
+            for file in os.listdir(feedpath + cls):
+                static = {}
+                fullpath = feedpath + cls + '/' + file
+                if self.debug:
+                    sys.stderr.write('Parsing %s\n' % fullpath)
+                root = etree.parse(fullpath)
+                for s in self.config.options('static'):
+                    static[s] = self.get_xpath_check(root, self.config.get('static', s))
+                    self.failure_check(static[s], fullpath, 'static')
+                #print static
+
+
+    def parse_files(self, feed):
+        self.config.read('%sfeeds/%s.cf' % (self.conf, feed))
+        feedpath = self.tempdir + feed + '/'
+        classes = self.get_classes(feed)
+        for c in classes:
+            self.parse_class(c, feedpath, self.config.get('settings', 'classify'))
+
 
     def process_feed(self, feed):
-        #self.retrieve_files(feed)
+        self.retrieve_files(feed)
         self.bucket_files(feed)
+        self.parse_files(feed)
+        self.write_last(feed)
 
 
     def process(self):
