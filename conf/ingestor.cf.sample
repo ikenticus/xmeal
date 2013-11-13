@@ -1,0 +1,8 @@
+[settings]
+tempdir = full/relative path to temporary directory
+feeds = comma-delimited <feed> list of conf/feeds/<feed>.cf
+;debug = True   # enable/disable debugging output
+max_workers = int(number of feeds to process concurrently)
+
+[odbc]
+SportsDB = DSN connection string?

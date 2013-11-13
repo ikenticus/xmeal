@@ -11,6 +11,7 @@ import base64
 import requests
 import ConfigParser
 from lxml import etree
+from concurrent import futures
 from datetime import datetime, timedelta
 
 
@@ -64,15 +65,28 @@ class Ingestor:
         return re.findall(regex, data)
 
 
+    def get_file(self, feed, file):
+        if self.debug:
+            sys.stderr.write('Saving %s\n' % file)
+        with open('%s%s/%s' % (self.tempdir, feed, os.path.basename(file)), 'wb') as handle:
+            for block in self.get_site(self.config, stream=file).iter_content(1024):
+                if not block:
+                    break
+                handle.write(block)
+
+
     def get_files(self, feed, data):
         for file in self.get_list(data, self.config.get('settings', 'list')):
-            if self.debug:
-                sys.stderr.write('Saving %s\n' % file)
-            with open('%s%s/%s' % (self.tempdir, feed, os.path.basename(file)), 'wb') as handle:
-                for block in self.get_site(self.config, stream=file).iter_content(1024):
-                    if not block:
-                        break
-                    handle.write(block)
+            self.get_file(feed, file)
+
+
+    def get_files_concurrent(self, feed, data):
+        pool = []
+        with futures.ThreadPoolExecutor(max_workers = self.config.get('settings', 'max_workers')) as e:
+            for file in self.get_list(data, self.config.get('settings', 'list')):
+                pool.append(e.submit(self.get_file, feed, file))
+            if len(pool) == 0:
+                sys.stderr.write('[%s] No new files to retrieve\n' % feed)
 
 
     def write_last(self, feed):
@@ -80,6 +94,13 @@ class Ingestor:
             file = open('last_'+feed, 'w')
             file.write(self.start[feed])
             file.close()
+
+
+    def get_workers(self, section='settings'):
+        max_workers = 0
+        if 'max_workers' in self.config.options(section):
+            max_workers = int(self.config.get(section, 'max_workers'))
+        return max_workers
 
 
     def retrieve_files(self, feed):
@@ -93,7 +114,16 @@ class Ingestor:
             last_dict = dict((fmt,float(amt)) for amt,fmt in last_default)
             last = (datetime.now() - timedelta(**last_dict)).strftime(self.config.get('settings', 'last'))
         self.start[feed] = datetime.now().strftime(self.config.get('settings', 'last'))
-        self.get_files(feed, self.get_site(self.config, last).text)
+
+        max_workers = self.get_workers()
+        if max_workers > 1:
+            if self.debug:
+                sys.stderr.write('[%s] Retrieving files concurrently with %d workers\n' % (feed, max_workers))
+            self.get_files_concurrent(feed, self.get_site(self.config, last).text)
+        else:
+            if self.debug:
+                sys.stderr.write('[%s] Retrieving files individually\n' % feed)
+            self.get_files(feed, self.get_site(self.config, last).text)
 
 
     def get_classes(self, feed, extra=False):
@@ -122,7 +152,38 @@ class Ingestor:
         return value
 
 
-    def bucket_files(self, feed):
+    def bucket_file(self, classes, feedpath, file):
+        fullpath = feedpath + file
+        if not os.path.isfile(fullpath):
+            return
+        if os.path.getsize(fullpath) == 0:
+            os.remove(fullpath)
+        else:
+            root = etree.parse(fullpath)
+            cls = self.get_xpath_check(root, self.config.get('settings', 'xpath'))
+            if self.debug:
+                sys.stderr.write('Classifying %s\n' % file)
+            if cls in classes:
+                os.rename(fullpath, feedpath + cls + '/' + file)
+            else:
+                os.rename(fullpath, feedpath + 'skipped/' + file)
+
+
+    def bucket_files(self, classes, feedpath):
+        for file in os.listdir(feedpath):
+            self.bucket_file(classes, feedpath, file)
+
+
+    def bucket_files_concurrent(self, classes, feedpath):
+        pool = []
+        with futures.ThreadPoolExecutor(max_workers = self.config.get('settings', 'max_workers')) as e:
+            for file in os.listdir(feedpath):
+                pool.append(e.submit(self.bucket_file, classes, feedpath, file))
+            if len(pool) == 0:
+                sys.stderr.write('[%s] No files to classify\n' % feedpath)
+
+
+    def classify_files(self, feed):
         feedpath = self.tempdir + feed + '/'
         self.config.read('%sfeeds/%s.cf' % (self.conf, feed))
 
@@ -131,21 +192,16 @@ class Ingestor:
             if not os.path.isdir(feedpath + c):
                 os.makedirs(feedpath + c) 
 
-        for file in os.listdir(feedpath):
-            fullpath = feedpath + file
-            if not os.path.isfile(fullpath):
-                continue
-            if os.path.getsize(fullpath) == 0:
-                os.remove(fullpath)
-            else:
-                root = etree.parse(fullpath)
-                cls = self.get_xpath_check(root, self.config.get('settings', 'xpath'))
-                if self.debug:
-                    sys.stderr.write('Classifying %s\n' % file)
-                if cls in classes:
-                    os.rename(fullpath, feedpath + cls + '/' + file)
-                else:
-                    os.rename(fullpath, feedpath + 'skipped/' + file)
+        max_workers = self.get_workers()
+        if max_workers > 1:
+            if self.debug:
+                sys.stderr.write('[%s] Classifying files concurrently with %d workers\n' % (feed, max_workers))
+            self.bucket_files_concurrent(classes, feedpath)
+        else:
+            if self.debug:
+                sys.stderr.write('[%s] Classifying files individually\n' % feed)
+            self.bucket_files(classes, feedpath)
+
 
 
     def failure_check(self, value, file, desc='unknown'):
@@ -184,14 +240,35 @@ class Ingestor:
 
     def process_feed(self, feed):
         self.retrieve_files(feed)
-        self.bucket_files(feed)
+        self.classify_files(feed)
         self.parse_files(feed)
         self.write_last(feed)
 
 
-    def process(self):
+    def process_feeds(self):
         for feed in self.feeds.split(','):
             self.process_feed(feed)
+
+
+    def process_feeds_concurrent(self):
+        pool = []
+        with futures.ThreadPoolExecutor(max_workers = self.config.get('settings', 'max_workers')) as e:
+            for feed in self.feeds.split(','):
+                pool.append(e.submit(self.process_feed, feed))
+            if len(pool) == 0:
+                sys.stderr.write('No feeds to process\n')
+
+
+    def process(self):
+        max_workers = self.get_workers()
+        if max_workers > 1:
+            if self.debug:
+                sys.stderr.write('Processing feeds concurrently with %d workers\n' % max_workers)
+            self.process_feeds_concurrent()
+        else:
+            if self.debug:
+                sys.stderr.write('Processing feeds individually\n')
+            self.process_feeds()
 
 
 if __name__ == "__main__":
