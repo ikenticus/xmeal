@@ -86,3 +86,10 @@ Type "help", "copyright", "credits" or "license" for more information.
 
 >>> ^D
 ```
+
+
+### Quick re-sort fixtures
+
+f='event-score,event-stats,event-stats-progressive,event-stats-composite,season-stats,postseason-stats,team-stats-batting,roster,ranking-bcs,poll-ap,poll-harris,standings-by-conference,standings-by-division,schedule-year,schedule,schedule-results,driver-stats,leaders-money,leader-list,results-by-player,rankings-atp,rankings-wta,leaderboard,leaderboard-matchplay'
+x=$(echo $(IFS=,; for i in $f; do echo $i; done | sort ; unset IFS)); echo ${x// /,}
+

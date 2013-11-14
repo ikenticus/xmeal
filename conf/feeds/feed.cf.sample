@@ -7,9 +7,13 @@ pass = <password>
 list = regex pattern for file list to generate url-path for file retrieval
 page = regex pattern for next page (if any) to generate url for file retrieval
 classify = name of classifier (i.e. fixtures)
-<classifier> = comma-delimited list of classifiers (i.e. fixtures = event-score,event-stats)
-xpath = xpath/to/obtain/@classifier
 fail = comma-delilmited list of failure patterns
 last = ?last_modified=%Y%m%d-datestamp
 last_default = # period ago (i.e. 1 day ago, 4 hours ago, etc)
 max_workers = # of concurrent threads for processing this particular feed
+max_pool = # of connection pool size for this particular feed
+
+[<classifier>]
+xpath = xpath/to/obtain/@classifier
+drop = comma-delimited list of <classifiers> to delete permanently
+keep = comma-delimited list of <classifiers> to process (should match files: <tempdir>/<classifier>/<keep>.cf)
