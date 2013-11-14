@@ -1,0 +1,10 @@
+[combine]
+group = sports-event/event-metadata/@event-key
+order = sports-metadata/@date-time
+
+[static]
+league_key = sports-metadata/sports-content-codes/sports-content-code[@code-type="league"]/@code-key
+league_name = sports-metadata/sports-content-codes/sports-content-code[@code-type="sport"]/@code-name
+season_key = sports-metadata/sports-content-codes/sports-content-code[@code-type="season"]/@code-key
+sub_season_type = sports-metadata/sports-content-codes/sports-content-code[@code-type="season-type"]/@code-key
+event_key = sports-event/event-metadata/@event-key

@@ -5,6 +5,7 @@ path = /url/path/to/feed
 user = <username>
 pass = <password>
 list = regex pattern for file list to generate url-path for file retrieval
+page = regex pattern for next page (if any) to generate url for file retrieval
 classify = name of classifier (i.e. fixtures)
 <classifier> = comma-delimited list of classifiers (i.e. fixtures = event-score,event-stats)
 xpath = xpath/to/obtain/@classifier
