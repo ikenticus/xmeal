@@ -1,9 +1,9 @@
+[combine]
+group = xpath to key used to group files to combine
+order = xpath to value (usually date/time stamp) used to determine order to combine
+
 [static]
-league_key = sports-metadata/sports-content-codes/sports-content-code[@code-type="league"]/@code-key
-league_name = sports-metadata/sports-content-codes/sports-content-code[@code-type="sport"]/@code-name
-season_key = sports-metadata/sports-content-codes/sports-content-code[@code-type="season"]/@code-key
-sub_season_type = sports-metadata/sports-content-codes/sports-content-code[@code-type="season-type"]/@code-key
-event_key =sports-event/event-metadata/@event-key
+<static_key> = xpath to static value
 
 [000]
 dsn = database dsn name in ingestor.cf to use
@@ -11,5 +11,5 @@ table = table to insert this section into
 columns = comma-delimited list of columns to insert
 <column> = xpath/to/@attribute,xpath/to/@backup
 
-[001_static_value]
-; same as [000] above but only runs if static=value
+[001 static=value]
+; similar to [000] above but only runs if static=value

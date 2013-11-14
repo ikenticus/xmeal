@@ -87,18 +87,15 @@ class Ingestor:
                 handle.write(block)
 
 
-    def get_files(self, feed, data):
-        for file in self.get_list(data, self.config[feed].get('settings', 'list')):
+    def get_files(self, feed, files, data):
+        for file in files:
             self.get_file(feed, file)
 
 
-    def get_files_concurrent(self, feed, data, workers):
-        pool = []
+    def get_files_concurrent(self, feed, files, data, workers):
         with futures.ThreadPoolExecutor(max_workers = workers) as e:
-            for file in self.get_list(data, self.config[feed].get('settings', 'list')):
-                pool.append(e.submit(self.get_file, feed, file))
-            if len(pool) == 0:
-                sys.stderr.write('[%s] No new files to retrieve\n' % feed)
+            for file in files:
+                e.submit(self.get_file, feed, file)
 
 
     def write_last(self, feed):
@@ -145,15 +142,19 @@ class Ingestor:
         self.start[feed] = datetime.now().strftime(self.config[feed].get('settings', 'last'))
 
         data = self.get_file_list(feed, last)
-        max_workers = self.get_workers(feed)
-        if max_workers > 1:
-            if self.debug:
-                sys.stderr.write('[%s] Retrieving files concurrently with %d workers\n' % (feed, max_workers))
-            self.get_files_concurrent(feed, data, max_workers)
+        files = self.get_list(data, self.config[feed].get('settings', 'list'))
+        if len(files) == 0:
+            sys.stderr.write('[%s] No new files to retrieve\n' % feed)
         else:
-            if self.debug:
-                sys.stderr.write('[%s] Retrieving files individually\n' % feed)
-            self.get_files(feed, data)
+            max_workers = self.get_workers(feed)
+            if max_workers > 1:
+                if self.debug:
+                    sys.stderr.write('[%s] Retrieving files concurrently with %d workers\n' % (feed, max_workers))
+                self.get_files_concurrent(feed, files, data, max_workers)
+            else:
+                if self.debug:
+                    sys.stderr.write('[%s] Retrieving files individually\n' % feed)
+                self.get_files(feed, files, data)
 
 
     def get_classes(self, feed, extra=False):
@@ -199,18 +200,15 @@ class Ingestor:
                 os.rename(fullpath, feedpath + 'skipped/' + file)
 
 
-    def bucket_files(self, feed, classes, feedpath):
-        for file in os.listdir(feedpath):
+    def bucket_files(self, feed, files, classes, feedpath):
+        for file in files:
             self.bucket_file(classes, feedpath, file)
 
 
-    def bucket_files_concurrent(self, feed, classes, feedpath):
-        pool = []
+    def bucket_files_concurrent(self, feed, files, classes, feedpath):
         with futures.ThreadPoolExecutor(max_workers = self.config[feed].get('settings', 'max_workers')) as e:
-            for file in os.listdir(feedpath):
-                pool.append(e.submit(self.bucket_file, feed, classes, feedpath, file))
-            if len(pool) == 0:
-                sys.stderr.write('[%s] No files to classify\n' % feedpath)
+            for file in files:
+                e.submit(self.bucket_file, feed, classes, feedpath, file)
 
 
     def classify_files(self, feed):
@@ -223,15 +221,19 @@ class Ingestor:
             if not os.path.isdir(feedpath + c):
                 os.makedirs(feedpath + c) 
 
-        max_workers = self.get_workers(feed)
-        if max_workers > 1:
-            if self.debug:
-                sys.stderr.write('[%s] Classifying files concurrently with %d workers\n' % (feed, max_workers))
-            self.bucket_files_concurrent(feed, classes, feedpath)
+        files = os.listdir(feedpath)
+        if len(files) == 0:
+            sys.stderr.write('[%s] No files to classify\n' % feedpath)
         else:
-            if self.debug:
-                sys.stderr.write('[%s] Classifying files individually\n' % feed)
-            self.bucket_files(feed, classes, feedpath)
+            max_workers = self.get_workers(feed)
+            if max_workers > 1:
+                if self.debug:
+                    sys.stderr.write('[%s] Classifying files concurrently with %d workers\n' % (feed, max_workers))
+                self.bucket_files_concurrent(feed, files, classes, feedpath)
+            else:
+                if self.debug:
+                    sys.stderr.write('[%s] Classifying files individually\n' % feed)
+                self.bucket_files(feed, files, classes, feedpath)
 
 
     def failure_check(self, feed, value, file, desc='unknown'):
@@ -290,6 +292,7 @@ class Ingestor:
             static[s] = self.get_xpath_check(root, self.config[feed].get('static', s))
             self.failure_check(feed, static[s], fullpath, 'static')
         return static
+        steps = [ s for s in self.config[feed].sections() if re.match('\d',s) ]
 
 
     def parse_files(self, feed, filepath):
@@ -335,29 +338,27 @@ class Ingestor:
 
 
     def parse_classes_concurrent(self, feed, classes, feedpath):
-        pool = []
         with futures.ThreadPoolExecutor(max_workers = len(classes)) as e:
             for cls in classes:
-                pool.append(e.submit(self.parse_class, feed, cls, feedpath))
-            if len(pool) == 0:
-                sys.stderr.write('[%s] No classes to parse\n' % feedpath)
+                e.submit(self.parse_class, feed, cls, feedpath)
 
 
     def parse_class_files(self, feed):
         self.config[feed].read('%sfeeds/%s.cf' % (self.conf, feed))
         feedpath = self.tempdir + feed + '/'
         classes = self.get_classes(feed)
-
-        max_workers = self.get_workers(feed)
-        if max_workers > 1:
-            if self.debug:
-                sys.stderr.write('[%s] Parsing classes concurrently with %d workers\n' % (feed, max_workers))
-            self.parse_classes_concurrent(feed, classes, feedpath)
+        if len(classes) == 0:
+            sys.stderr.write('[%s] No classes to parse\n' % feedpath)
         else:
-            if self.debug:
-                sys.stderr.write('[%s] Parsing classes individually\n' % feed)
-            self.parse_classes(feed, classes, feedpath)
-
+            max_workers = self.get_workers(feed)
+            if max_workers > 1:
+                if self.debug:
+                    sys.stderr.write('[%s] Parsing classes concurrently with %d workers\n' % (feed, max_workers))
+                self.parse_classes_concurrent(feed, classes, feedpath)
+            else:
+                if self.debug:
+                    sys.stderr.write('[%s] Parsing classes individually\n' % feed)
+                self.parse_classes(feed, classes, feedpath)
 
 
     def process_feed(self, feed):
@@ -367,31 +368,31 @@ class Ingestor:
         self.write_last(feed)
 
 
-    def process_feeds(self):
-        for feed in self.feeds.split(','):
+    def process_feeds(self, feeds):
+        for feed in feeds:
             self.process_feed(feed)
 
 
-    def process_feeds_concurrent(self):
-        pool = []
-        feeds = self.feeds.split(',')
+    def process_feeds_concurrent(self, feeds):
         with futures.ThreadPoolExecutor(max_workers = len(feeds)) as e:
             for feed in feeds:
-                pool.append(e.submit(self.process_feed, feed))
-            if len(pool) == 0:
-                sys.stderr.write('No feeds to process\n')
+                e.submit(self.process_feed, feed)
 
 
     def process(self):
-        max_workers = self.get_workers('base')
-        if max_workers > 1:
-            if self.debug:
-                sys.stderr.write('Processing feeds concurrently with %d workers\n' % max_workers)
-            self.process_feeds_concurrent()
+        feeds = self.feeds.split(',')
+        if len(feeds) == 0:
+            sys.stderr.write('No feeds to process\n')
         else:
-            if self.debug:
-                sys.stderr.write('Processing feeds individually\n')
-            self.process_feeds()
+            max_workers = self.get_workers('base')
+            if max_workers > 1:
+                if self.debug:
+                    sys.stderr.write('Processing feeds concurrently with %d workers\n' % max_workers)
+                self.process_feeds_concurrent(feeds)
+            else:
+                if self.debug:
+                    sys.stderr.write('Processing feeds individually\n')
+                self.process_feeds(feeds)
 
 
 if __name__ == "__main__":
