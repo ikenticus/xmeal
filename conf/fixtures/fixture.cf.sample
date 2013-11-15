@@ -1,6 +1,6 @@
-[combine]
-group = xpath to key used to group files to combine
-order = xpath to value (usually date/time stamp) used to determine order to combine
+[merge]
+group = xpath to key used to group files to merge
+order = xpath to value (usually date/time stamp) used to determine order to merge
 
 [static]
 <static_key> = xpath to static value

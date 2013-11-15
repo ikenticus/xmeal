@@ -1,8 +1,9 @@
 [settings]
-tempdir = full/relative path to temporary directory
-feeds = comma-delimited <feed> list of conf/feeds/<feed>.cf
-;debug = True   # enable/disable debugging output
-max_workers = int(number of feeds to process concurrently)
+feeds = comma-delimited list of feeds (should match conf/feeds/<feed>.cf)
+actions = pull,sort,parse,push
+tempdir = <dir>/ where all temp files will be stored
+;debug = True   #uncomment to enable debugging stderr output
+
 
 [odbc]
-SportsDB = DSN connection string?
+<name> = DSN=%s;UID=%s;PWD=%s (DSN should match odbc.ini [section])

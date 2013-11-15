@@ -58,23 +58,45 @@ class Ingestor:
 
 
     def show_help(self):
-        sys.stderr.write('''\nUsage: %s <command>
-        \n    Currently, no commands.  All configuration settings are stored in conf/*.cf
+        sys.stderr.write('''\nUsage: %s <command> [<config.cf>]
+        \n    All configuration settings are stored in conf/*.cf\n    You can override the default by specifying a config.cf
         \n''' % self.cmd)
         sys.exit(1)
         
+
+    def config_clone(self, key):
+        if key not in self.config:
+            self.config[key] = self.config['base']
+
+    def config_feed(self, feed):
+        self.config_clone(feed)
+        self.config[feed].read('%sfeeds/%s.cf' % (self.conf, feed))
+        self.config_path('%s/%s' % (self.tempdir, feed))
+
+    def config_path(self, dirpath):
+        if not os.path.isdir(dirpath):
+            os.makedirs(dirpath)
+
+
+    def db_close(self, dsn):
+        for conn in self.dbpool[dsn]:
+            conn.close()
 
     def db_connect(self, dsn):
         self.dbpool[dsn] = []
         self.dblock[dsn] = Lock()
         self.dbflag[dsn] = Semaphore()
-
         for pool in range(0, self.max_conns):
             conn = pyodbc.connect(self.config['base'].get('odbc', dsn), autocommit=True)
             if self.debug:
                 sys.stderr.write('[%s] Opened pool connection %d\n' % (dsn, pool))
             self.dbpool[dsn].append(conn)
 
+    def db_execute(self, dsn, sql, params=[]):
+        conn = self.db_get_from_pool(dsn)
+        cur = conn.cursor()
+        cur.execute(sql, *params)
+        self.db_return_to_pool(dsn, conn)
 
     def db_get_from_pool(self, dsn):
         if not self.dbpool:
@@ -82,12 +104,6 @@ class Ingestor:
         self.dbflag[dsn].acquire()
         conn = self.dbpool[dsn].pop()
         return conn
-
-
-    def db_return_to_pool(self, dsn, conn):
-        self.dbpool[dsn].append(conn)
-        self.dbflag[dsn].release()
-
 
     def db_query(self, dsn, sql, params=[]):
         conn = self.db_get_from_pool(dsn)
@@ -97,23 +113,16 @@ class Ingestor:
         self.db_return_to_pool(dsn, conn)
         return result
 
-
-    def db_execute(self, dsn, sql, params=[]):
-        conn = self.db_get_from_pool(dsn)
-        cur = conn.cursor()
-        cur.execute(sql, *params)
-        self.db_return_to_pool(dsn, conn)
+    def db_return_to_pool(self, dsn, conn):
+        self.dbpool[dsn].append(conn)
+        self.dbflag[dsn].release()
 
 
-    def db_close(self, dsn):
-        for conn in self.dbpool[dsn]:
-            conn.close()
-
-
-    def config_clone(self, key):
-        if key not in self.config:
-            self.config[key] = self.config['base']
-
+    def get_classes(self, feed, option, extra=False):
+        classes = self.config[feed].get(self.config[feed].get('settings', 'classify'), option).split(',')
+        if extra:
+            classes.extend(['skipped', 'failed'])
+        return classes
 
     def get_site(self, conf, last='', stream=False, url=None):
         headers = { 'Authorization': 'Basic %s' % base64.encodestring('%s:%s' % (
@@ -127,31 +136,42 @@ class Ingestor:
             url = conf.get('settings', 'site') + conf.get('settings', 'path') + last
             return requests.get(url, headers=headers)
 
+    def get_workers(self, feed, section='settings'):
+        max_workers = 0
+        if 'max_workers' in self.config[feed].options(section):
+            max_workers = int(self.config[feed].get(section, 'max_workers'))
+        return max_workers
 
-    def get_list(self, data, regex):
-        return re.findall(regex, data)
-
-
-    def get_file(self, feed, file):
-        if self.debug:
-            sys.stderr.write('[%s] Saving %s\n' % (feed, file))
-        with open('%s%s/%s' % (self.tempdir, feed, os.path.basename(file)), 'wb') as handle:
-            for block in self.get_site(self.config[feed], stream=file).iter_content(1024):
-                if not block:
+    def get_xpath_check(self, root, xpaths):
+        value = None
+        if ',' in xpaths:
+            for xpath in xpaths.split(','):
+                value = self.get_xpath_safe(root, xpath)
+                if value:
                     break
-                handle.write(block)
+        else:
+            value = self.get_xpath_safe(root, xpaths)
+        return value
+
+    def get_xpath_safe(self, root, xpath):
+        try:
+            return root.xpath(xpath)[0]
+        except:
+            return None
 
 
-    def get_files(self, feed, files, data):
-        for file in files:
-            self.get_file(feed, file)
-
-
-    def get_files_concurrent(self, feed, files, data, workers):
-        with futures.ThreadPoolExecutor(max_workers = workers) as e:
-            for file in files:
-                e.submit(self.get_file, feed, file)
-
+    def read_last(self, feed):
+        if os.path.isfile('last_'+feed):
+            last = open('last_'+feed).read()
+        else:
+            if self.last_default:
+                last_default = [self.last_default.split()[:2]]
+            else:
+                last_default = [self.config[feed].get('settings', 'last_default').split()[:2]]
+            last_dict = dict((fmt,float(amt)) for amt,fmt in last_default)
+            last = (datetime.now() - timedelta(**last_dict)).strftime(self.config[feed].get('settings', 'last'))
+        self.start[feed] = datetime.now().strftime(self.config[feed].get('settings', 'last'))
+        return last
 
     def write_last(self, feed):
         if feed in self.start:
@@ -160,14 +180,16 @@ class Ingestor:
             file.close()
 
 
-    def get_workers(self, feed, section='settings'):
-        max_workers = 0
-        if 'max_workers' in self.config[feed].options(section):
-            max_workers = int(self.config[feed].get(section, 'max_workers'))
-        return max_workers
+    def pull_file(self, feed, file):
+        if self.debug:
+            sys.stderr.write('[%s] Saving %s\n' % (feed, file))
+        with open('%s%s/%s' % (self.tempdir, feed, os.path.basename(file)), 'wb') as handle:
+            for block in self.get_site(self.config[feed], stream=file).iter_content(1024):
+                if not block:
+                    break
+                handle.write(block)
 
-
-    def get_file_list(self, feed, last):
+    def pull_file_list(self, feed, last):
         cnt = 0
         data = []
         page = 'start'
@@ -182,26 +204,11 @@ class Ingestor:
             page = re.findall(self.config[feed].get('settings', 'page'), data[-1])
         return ''.join(data)
 
-
-    def retrieve_files(self, feed):
-        self.config_clone(feed)
-        self.config[feed].read('%sfeeds/%s.cf' % (self.conf, feed))
-        if not os.path.isdir('%s/%s' % (self.tempdir, feed)):
-            os.makedirs('%s/%s' % (self.tempdir, feed))
-        if os.path.isfile('last_'+feed):
-            last = open('last_'+feed).read()
-        else:
-            if self.last_default:
-                last_default = [self.last_default.split()[:2]]
-            else:
-                last_default = [self.config[feed].get('settings', 'last_default').split()[:2]]
-            last_dict = dict((fmt,float(amt)) for amt,fmt in last_default)
-            last = (datetime.now() - timedelta(**last_dict)).strftime(self.config[feed].get('settings', 'last'))
-        print last
-        self.start[feed] = datetime.now().strftime(self.config[feed].get('settings', 'last'))
-
-        data = self.get_file_list(feed, last)
-        files = self.get_list(data, self.config[feed].get('settings', 'list'))
+    def pull_files(self, feed):
+        last = self.read_last(feed)
+        data = self.pull_file_list(feed, last)
+        patt = self.config[feed].get('settings', 'list')
+        files = re.findall(patt, data)
         if len(files) == 0:
             sys.stderr.write('[%s] No new files to retrieve\n' % feed)
         else:
@@ -209,40 +216,23 @@ class Ingestor:
             if max_workers > 1:
                 if self.debug:
                     sys.stderr.write('[%s] Retrieving files concurrently with %d workers\n' % (feed, max_workers))
-                self.get_files_concurrent(feed, files, data, max_workers)
+                self.pull_files_concurrent(feed, files, data, max_workers)
             else:
                 if self.debug:
                     sys.stderr.write('[%s] Retrieving files individually\n' % feed)
-                self.get_files(feed, files, data)
+                self.pull_files_single(feed, files, data)
+
+    def pull_files_concurrent(self, feed, files, data, workers):
+        with futures.ThreadPoolExecutor(max_workers = workers) as e:
+            for file in files:
+                e.submit(self.pull_file, feed, file)
+
+    def pull_files_single(self, feed, files, data):
+        for file in files:
+            self.pull_file(feed, file)
 
 
-    def get_classes(self, feed, option, extra=False):
-        classes = self.config[feed].get(self.config[feed].get('settings', 'classify'), option).split(',')
-        if extra:
-            classes.extend(['skipped', 'failed'])
-        return classes
-
-
-    def get_xpath_safe(self, root, xpath):
-        try:
-            return root.xpath(xpath)[0]
-        except:
-            return None
-
-
-    def get_xpath_check(self, root, xpaths):
-        value = None
-        if ',' in xpaths:
-            for xpath in xpaths.split(','):
-                value = self.get_xpath_safe(root, xpath)
-                if value:
-                    break
-        else:
-            value = self.get_xpath_safe(root, xpaths)
-        return value
-
-
-    def bucket_file(self, feed, keep, drop, feedpath, file):
+    def sort_file(self, feed, keep, drop, feedpath, file):
         fullpath = feedpath + file
         if not os.path.isfile(fullpath):
             return
@@ -264,29 +254,12 @@ class Ingestor:
                     sys.stderr.write('[%s] Skipping %s\n' % (feed, file))
                 os.rename(fullpath, feedpath + 'skipped/' + file)
 
-
-    def bucket_files(self, feed, files, keep, drop, feedpath):
-        for file in files:
-            self.bucket_file(keep, drop, feedpath, file)
-
-
-    def bucket_files_concurrent(self, feed, files, keep, drop, feedpath):
-        with futures.ThreadPoolExecutor(max_workers = self.config[feed].get('settings', 'max_workers')) as e:
-            for file in files:
-                e.submit(self.bucket_file, feed, keep, drop, feedpath, file)
-
-
-    def classify_files(self, feed):
-        self.config_clone(feed)
-        self.config[feed].read('%sfeeds/%s.cf' % (self.conf, feed))
-        feedpath = self.tempdir + feed + '/'
-
+    def sort_files(self, feed):
         keep = self.get_classes(feed, 'keep', extra=True)
         drop = self.get_classes(feed, 'drop')
+        feedpath = self.tempdir + feed + '/'
         for cls in keep:
-            if not os.path.isdir(feedpath + cls):
-                os.makedirs(feedpath + cls)
-
+            self.config_path(feedpath + cls)
         files = os.listdir(feedpath)
         if len(files) == 0:
             sys.stderr.write('[%s] No files to classify\n' % feedpath)
@@ -295,48 +268,42 @@ class Ingestor:
             if max_workers > 1:
                 if self.debug:
                     sys.stderr.write('[%s] Classifying files concurrently with %d workers\n' % (feed, max_workers))
-                self.bucket_files_concurrent(feed, files, keep, drop, feedpath)
+                self.sort_files_concurrent(feed, files, keep, drop, feedpath)
             else:
                 if self.debug:
                     sys.stderr.write('[%s] Classifying files individually\n' % feed)
-                self.bucket_files(feed, files, keep, drop, feedpath)
+                self.sort_files_single(feed, files, keep, drop, feedpath)
+
+    def sort_files_concurrent(self, feed, files, keep, drop, feedpath):
+        with futures.ThreadPoolExecutor(max_workers = self.config[feed].get('settings', 'max_workers')) as e:
+            for file in files:
+                e.submit(self.sort_file, feed, keep, drop, feedpath, file)
+
+    def sort_files_single(self, feed, files, keep, drop, feedpath):
+        for file in files:
+            self.sort_file(keep, drop, feedpath, file)
 
 
-    def failure_check(self, feed, value, file, desc='unknown'):
-        if 'fail' in self.config[feed].options('settings'):
-            for fail in self.config[feed].get('settings', 'fail').split(','):
-                if value and fail in value:
-                    if self.debug:
-                        sys.stderr.write('[%s] Failed %s check: %s\n' % (feed, desc, file))
-                    os.rename(file, '%s%s/failed/%s' % (self.tempdir,
-                        file.replace(self.tempdir, '').split('/')[0], os.path.basename(file)))
+    def parse_class(self, feed, cls, feedpath, with_push=False):
+        conf = '%s%s/%s.cf' % (self.conf, self.config[feed].get('settings', 'classify'), cls)
+        max_workers = self.get_workers(feed)
+        if os.path.isfile(conf):
+            self.config_clone(feed)
+            self.config[feed].read(conf)
+            if max_workers > 1:
+                if self.debug:
+                    sys.stderr.write('[%s] Parsing files concurrently with %d workers\n' % (feed, max_workers))
+                if 'merge' in self.config[feed].sections():
+                    self.parse_class_latest(feed, self.parse_merges_concurrent(feed, feedpath + cls, max_workers), feedpath + cls)
+                self.parse_files_concurrent(feed, feedpath + cls, max_workers, with_push)
+            else:
+                if self.debug:
+                    sys.stderr.write('[%s] Parsing files individually\n' % feed)
+                if 'merge' in self.config[feed].sections():
+                    self.parse_class_latest(feed, self.parse_merges_single(feed, feedpath + cls), feedpath + cls)
+                self.parse_files_single(feed, feedpath + cls, with_push)
 
-
-    def combine_file(self, feed, fullpath):
-        root = etree.parse(fullpath)
-        group = self.get_xpath_check(root, self.config[feed].get('combine', 'group'))
-        order = self.get_xpath_check(root, self.config[feed].get('combine', 'order'))
-        return {'group': group, 'order': order, 'file': fullpath}
-
-
-    def combine_files(self, feed, filepath):
-        pool = []
-        for file in os.listdir(filepath):
-            pool.append(self.combine_file(feed, filepath + '/' + file))
-        return pool
-
-
-    def combine_files_concurrent(self, feed, filepath, workers):
-        pool = []
-        with futures.ThreadPoolExecutor(max_workers = workers) as e:
-            for file in os.listdir(filepath):
-                pool.append(e.submit(self.combine_file, feed, filepath + '/' + file))
-            if len(pool) == 0:
-                sys.stderr.write('[%s] No files to parse\n' % feedpath)
-            return [ p.result() for p in pool ]
-
-
-    def keep_latest(self, feed, filelist, fullpath):
+    def parse_class_latest(self, feed, filelist, fullpath):
         keep = {}
         for s in filelist:
             if s['group'] not in keep or keep[s['group']]['order'] < s['order']:
@@ -349,67 +316,7 @@ class Ingestor:
                     sys.stderr.write('[%s] Removing outdated %s\n' % (feed, file))
                 os.remove(filepath)
 
-    def parse_file(self, feed, fullpath):
-        static = {}
-        if self.debug:
-            sys.stderr.write('[%s] Parsing %s\n' % (feed, fullpath))
-        root = etree.parse(fullpath)
-        for s in self.config[feed].options('static'):
-            static[s] = self.get_xpath_check(root, self.config[feed].get('static', s))
-            self.failure_check(feed, static[s], fullpath, 'static')
-        return static
-        steps = [ s for s in self.config[feed].sections() if re.match('\d',s) ]
-
-
-    def parse_files(self, feed, filepath):
-        pool = []
-        for file in os.listdir(filepath):
-            pool.append(self.parse_file(feed, filepath + '/' + file))
-        pprint (pool)
-
-
-    def parse_files_concurrent(self, feed, filepath, workers):
-        pool = []
-        with futures.ThreadPoolExecutor(max_workers = workers) as e:
-            for file in os.listdir(filepath):
-                pool.append(e.submit(self.parse_file, feed, filepath + '/' + file))
-            if len(pool) == 0:
-                sys.stderr.write('[%s] No files to parse\n' % feedpath)
-            pprint ([ p.result() for p in pool ])
-
-
-    def parse_class(self, feed, cls, feedpath):
-        conf = '%s%s/%s.cf' % (self.conf, self.config[feed].get('settings', 'classify'), cls)
-        max_workers = self.get_workers(feed)
-        if os.path.isfile(conf):
-            self.config_clone(feed)
-            self.config[feed].read(conf)
-            if max_workers > 1:
-                if self.debug:
-                    sys.stderr.write('[%s] Parsing files concurrently with %d workers\n' % (feed, max_workers))
-                if 'combine' in self.config[feed].sections():
-                    self.keep_latest(feed, self.combine_files_concurrent(feed, feedpath + cls, max_workers), feedpath + cls)
-                self.parse_files_concurrent(feed, feedpath + cls, max_workers)
-            else:
-                if self.debug:
-                    sys.stderr.write('[%s] Parsing files individually\n' % feed)
-                if 'combine' in self.config[feed].sections():
-                    self.keep_latest(feed, self.combine_files(feed, feedpath + cls), feedpath + cls)
-                self.parse_files(feed, feedpath + cls)
-
-
-    def parse_classes(self, feed, classes, feedpath):
-        for cls in classes:
-            self.parse_class(feed, cls, feedpath)
-
-
-    def parse_classes_concurrent(self, feed, classes, feedpath):
-        with futures.ThreadPoolExecutor(max_workers = len(classes)) as e:
-            for cls in classes:
-                e.submit(self.parse_class, feed, cls, feedpath)
-
-
-    def parse_class_files(self, feed):
+    def parse_classes(self, feed, with_push=False):
         self.config[feed].read('%sfeeds/%s.cf' % (self.conf, feed))
         feedpath = self.tempdir + feed + '/'
         classes = self.get_classes(feed, 'keep')
@@ -420,36 +327,95 @@ class Ingestor:
             if max_workers > 1:
                 if self.debug:
                     sys.stderr.write('[%s] Parsing classes concurrently with %d workers\n' % (feed, max_workers))
-                self.parse_classes_concurrent(feed, classes, feedpath)
+                self.parse_classes_concurrent(feed, classes, feedpath, with_push)
             else:
                 if self.debug:
                     sys.stderr.write('[%s] Parsing classes individually\n' % feed)
-                self.parse_classes(feed, classes, feedpath)
+                self.parse_classes_single(feed, classes, feedpath, with_push)
+
+    def parse_classes_concurrent(self, feed, classes, feedpath, with_push=False):
+        with futures.ThreadPoolExecutor(max_workers = len(classes)) as e:
+            for cls in classes:
+                e.submit(self.parse_class, feed, cls, feedpath, with_push)
+
+    def parse_classes_single(self, feed, classes, feedpath, with_push=False):
+        for cls in classes:
+            self.parse_class(feed, cls, feedpath, with_push)
+
+
+    def parse_file(self, feed, fullpath, with_push=False):
+        static = {}
+        if self.debug:
+            sys.stderr.write('[%s] Parsing %s\n' % (feed, fullpath))
+        root = etree.parse(fullpath)
+        for s in self.config[feed].options('static'):
+            static[s] = self.get_xpath_check(root, self.config[feed].get('static', s))
+            self.parse_file_fail(feed, static[s], fullpath, 'static')
+        return static
+        steps = [ s for s in self.config[feed].sections() if re.match('\d',s) ]
+
+    def parse_file_fail(self, feed, value, file, desc='unknown'):
+        if 'fail' in self.config[feed].options('settings'):
+            for fail in self.config[feed].get('settings', 'fail').split(','):
+                if value and fail in value:
+                    if self.debug:
+                        sys.stderr.write('[%s] Failed %s check: %s\n' % (feed, desc, file))
+                    os.rename(file, '%s%s/failed/%s' % (self.tempdir,
+                        file.replace(self.tempdir, '').split('/')[0], os.path.basename(file)))
+
+    def parse_files_concurrent(self, feed, filepath, workers, with_push=False):
+        pool = []
+        with futures.ThreadPoolExecutor(max_workers = workers) as e:
+            for file in os.listdir(filepath):
+                pool.append(e.submit(self.parse_file, feed, filepath + '/' + file, with_push))
+            if len(pool) == 0:
+                sys.stderr.write('[%s] No files to parse\n' % feedpath)
+            pprint ([ p.result() for p in pool ])
+
+    def parse_files_single(self, feed, filepath, with_push=False):
+        pool = []
+        for file in os.listdir(filepath):
+            pool.append(self.parse_file(feed, filepath + '/' + file, with_push))
+        pprint (pool)
+
+
+    def parse_merge(self, feed, fullpath):
+        root = etree.parse(fullpath)
+        group = self.get_xpath_check(root, self.config[feed].get('merge', 'group'))
+        order = self.get_xpath_check(root, self.config[feed].get('merge', 'order'))
+        return {'group': group, 'order': order, 'file': fullpath}
+
+    def parse_merges_concurrent(self, feed, filepath, workers):
+        pool = []
+        with futures.ThreadPoolExecutor(max_workers = workers) as e:
+            for file in os.listdir(filepath):
+                pool.append(e.submit(self.parse_merge, feed, filepath + '/' + file))
+            if len(pool) == 0:
+                sys.stderr.write('[%s] No files to parse\n' % feedpath)
+            return [ p.result() for p in pool ]
+
+    def parse_merges_single(self, feed, filepath):
+        pool = []
+        for file in os.listdir(filepath):
+            pool.append(self.parse_merge(feed, filepath + '/' + file))
+        return pool
 
 
     def process_feed(self, feed):
+        self.config_feed(feed)
         actions = self.actions.split(',')
         if 'pull' in actions:
-            self.retrieve_files(feed)
+            self.pull_files(feed)
+        if 'sort' in actions:
+            self.sort_files(feed)
         if 'parse' in actions:
-            self.classify_files(feed)
-            self.parse_class_files(feed)
+            self.parse_classes(feed, with_push='push' in actions)
+        if 'push' in actions:
+            self.push_tables(feed, with_parse='parse' in actions)
         if 'pull' in actions:
             self.write_last(feed)
 
-
-    def process_feeds(self, feeds):
-        for feed in feeds:
-            self.process_feed(feed)
-
-
-    def process_feeds_concurrent(self, feeds):
-        with futures.ThreadPoolExecutor(max_workers = len(feeds)) as e:
-            for feed in feeds:
-                e.submit(self.process_feed, feed)
-
-
-    def process(self):
+    def process_feeds(self):
         feeds = self.feeds.split(',')
         if len(feeds) == 0:
             sys.stderr.write('No feeds to process\n')
@@ -462,9 +428,18 @@ class Ingestor:
             else:
                 if self.debug:
                     sys.stderr.write('Processing feeds individually\n')
-                self.process_feeds(feeds)
+                self.process_feeds_single(feeds)
+
+    def process_feeds_concurrent(self, feeds):
+        with futures.ThreadPoolExecutor(max_workers = len(feeds)) as e:
+            for feed in feeds:
+                e.submit(self.process_feed, feed)
+
+    def process_feeds_single(self, feeds):
+        for feed in feeds:
+            self.process_feed(feed)
 
 
 if __name__ == "__main__":
     tool = Ingestor(sys.argv)
-    tool.process()
+    tool.process_feeds()

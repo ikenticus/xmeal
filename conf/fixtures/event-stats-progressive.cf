@@ -1,4 +1,4 @@
-[combine]
+[merge]
 group = sports-event/event-metadata/@event-key
 order = sports-metadata/@date-time
 
