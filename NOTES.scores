@@ -1,0 +1,26 @@
+>>> from lxml import etree
+>>> root = etree.parse('xt.prog.20131109133327-39287-02.088-event-stats-progressive.xml')
+>>> print root
+<lxml.etree._ElementTree object at 0x101ec9830>
+>>> print root.xpath('sports-metadata/@doc-id')
+['xt.prog.20131109133327-39287-02.088-event-stats-progressive']
+>>> print root.xpath('sports-metadata/sports-title/text()')
+['Grant Rohach rushed for 11 yards.']
+>>> print root.xpath('sports-event/team/team-metadata/name/@last')
+['Horned Frogs', 'Cyclones']
+>>> print root.xpath('sports-event/team/team-stats/sub-score/@period-value')
+['1', '2', '1', '2']
+>>> print root.xpath('sports-event/team/team-stats/sub-score/@score')
+['7', '7', '0', '7']
+
+>>> node = root.findall('sports-event/team/team-stats/sub-score')
+>>> print node
+[<Element sub-score at 0x101ecd4b0>, <Element sub-score at 0x101ecd500>, <Element sub-score at 0x101ecd460>, <Element sub-score at 0x101ecd550>]
+>>> for i in node:
+...   print i.xpath('../../team-metadata/@team-key')
+... 
+['l.ncaa.org.mfoot-t.612']
+['l.ncaa.org.mfoot-t.612']
+['l.ncaa.org.mfoot-t.518']
+['l.ncaa.org.mfoot-t.518']
+

@@ -3,13 +3,12 @@ group = xpath to key used to group files to merge
 order = xpath to value (usually date/time stamp) used to determine order to merge
 
 [static]
-<static_key> = xpath to static value
+<static_key> = xpath/to/@attribute,xpath/to/@backup
 
 [000]
-dsn = database dsn name in ingestor.cf to use
-table = table to insert this section into
-columns = comma-delimited list of columns to insert
-<column> = xpath/to/@attribute,xpath/to/@backup
+_table = 3-part table name to insert this section into (much match [tables] in conf/ingestor.cf)
+_root = root xpath to iterate this section
+<column> = relative xpath to attribute from _root (multiple, should match [table] columns)
 
-[001 static=value]
-; similar to [000] above but only runs if static=value
+[001 static=slugvalue]
+; similar to [000] above but only runs if static-var = slugified(value)

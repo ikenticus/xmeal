@@ -4,6 +4,8 @@ actions = pull,sort,parse,push
 tempdir = <dir>/ where all temp files will be stored
 ;debug = True   #uncomment to enable debugging stderr output
 
-
 [odbc]
-<name> = DSN=%s;UID=%s;PWD=%s (DSN should match odbc.ini [section])
+<database> = DSN=%s;UID=%s;PWD=%s (DSN should match odbc.ini [section])
+
+[tables]
+database.dbo.table = column1,...,columnN (database should match [odbc] options above)

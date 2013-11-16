@@ -23,33 +23,50 @@ class Ingestor:
         self.debug = False
         self.start = {}
         self.config = {}
+        self.tables = {}
+
+        '''
+            self.tables = {
+                'dbo.SMG_Table': {
+                    'static': {},
+                    'columns': [],
+                    'rows': [{}]
+                }
+            }
+        '''
 
         # retrieve conf file using current script name
         cfdir = os.path.dirname(args[0])
         if cfdir:
             cfdir += '/'
         self.conf = cfdir + 'conf/'
-        cfname = self.conf + self.cmd.replace('.py', '.cf')
+        self.cfname = self.conf + self.cmd.replace('.py', '.cf')
 
+        actions = False
         if len(args) > 1:
             if args[1] == 'help':
                 self.show_help()
             elif args[1].endswith('.cf'):
-                cfname = args[1]
-                sys.stderr.write('Reading from alternate config: %s\n' % cfname)
+                self.cfname = args[1]
+                sys.stderr.write('Reading from alternate config: %s\n' % self.cfname)
+            else:
+                actions = args[1]
 
-        if os.path.exists(cfname):
+        if os.path.exists(self.cfname):
             # Read from configuration file
             config = ConfigParser.ConfigParser()
-            config.read(cfname)
+            config.read(self.cfname)
             for s in config.options('settings'):
                 setattr(self, s, config.get('settings', s))
             self.config['base'] = config
             for feed in self.feeds.split(','):
                 self.config_clone(feed)
         else:
-            sys.stderr.write('Config file [%s] not found!\n' % cfname)
+            sys.stderr.write('Config file [%s] not found!\n' % self.cfname)
             sys.exit(2)
+
+        if actions:
+            self.actions = actions
 
         # database configs
         self.dbpool = {}
@@ -58,9 +75,15 @@ class Ingestor:
 
 
     def show_help(self):
-        sys.stderr.write('''\nUsage: %s <command> [<config.cf>]
-        \n    All configuration settings are stored in conf/*.cf\n    You can override the default by specifying a config.cf
-        \n''' % self.cmd)
+        sys.stderr.write('''\nUsage: %s [<action>]\n
+        help         displays this help usage
+        pull         retrieve "last" files(s) from all specified feeds
+        sort         separates all the pulled files into classifier folders
+        parse        extracts all the data from the sorted files based on the rules
+        push         insert all the parsed data into the db, initiating any load sprocs
+        parse,push   multiple actions can be specified comma-delimited
+        \n    If not action specified, will execute default settings stored in %s
+        \n''' % (self.cmd, self.cfname))
         sys.exit(1)
         
 
@@ -142,20 +165,20 @@ class Ingestor:
             max_workers = int(self.config[feed].get(section, 'max_workers'))
         return max_workers
 
-    def get_xpath_check(self, root, xpaths):
+    def get_xpath_check(self, xdoc, xpaths):
         value = None
         if ',' in xpaths:
             for xpath in xpaths.split(','):
-                value = self.get_xpath_safe(root, xpath)
+                value = self.get_xpath_safe(xdoc, xpath)
                 if value:
                     break
         else:
-            value = self.get_xpath_safe(root, xpaths)
+            value = self.get_xpath_safe(xdoc, xpaths)
         return value
 
-    def get_xpath_safe(self, root, xpath):
+    def get_xpath_safe(self, xdoc, xpath):
         try:
-            return root.xpath(xpath)[0]
+            return xdoc.xpath(xpath)[0]
         except:
             return None
 
@@ -164,8 +187,8 @@ class Ingestor:
         if os.path.isfile('last_'+feed):
             last = open('last_'+feed).read()
         else:
-            if self.last_default:
-                last_default = [self.last_default.split()[:2]]
+            if 'last_default' in self.config[feed].options('settings'):
+                last_default = [self.config[feed].get('settings', 'last_default').split()[:2]]
             else:
                 last_default = [self.config[feed].get('settings', 'last_default').split()[:2]]
             last_dict = dict((fmt,float(amt)) for amt,fmt in last_default)
@@ -239,8 +262,8 @@ class Ingestor:
         if os.path.getsize(fullpath) == 0:
             os.remove(fullpath)
         else:
-            root = etree.parse(fullpath)
-            cls = self.get_xpath_check(root, self.config[feed].get(self.config[feed].get('settings', 'classify'), 'xpath'))
+            xdoc = etree.parse(fullpath)
+            cls = self.get_xpath_check(xdoc, self.config[feed].get(self.config[feed].get('settings', 'classify'), 'xpath'))
             if cls in drop:
                 if self.debug:
                     sys.stderr.write('[%s] Dropping %s\n' % (feed, file))
@@ -347,11 +370,8 @@ class Ingestor:
         static = {}
         if self.debug:
             sys.stderr.write('[%s] Parsing %s\n' % (feed, fullpath))
-        root = etree.parse(fullpath)
-        for s in self.config[feed].options('static'):
-            static[s] = self.get_xpath_check(root, self.config[feed].get('static', s))
-            self.parse_file_fail(feed, static[s], fullpath, 'static')
-        return static
+        xdoc = etree.parse(fullpath)
+        static =  self.parse_file_static(feed, fullpath)
         steps = [ s for s in self.config[feed].sections() if re.match('\d',s) ]
 
     def parse_file_fail(self, feed, value, file, desc='unknown'):
@@ -362,6 +382,12 @@ class Ingestor:
                         sys.stderr.write('[%s] Failed %s check: %s\n' % (feed, desc, file))
                     os.rename(file, '%s%s/failed/%s' % (self.tempdir,
                         file.replace(self.tempdir, '').split('/')[0], os.path.basename(file)))
+
+    def parse_file_static(self, feed, fullpath):
+        for s in self.config[feed].options('static'):
+            static[s] = self.get_xpath_check(xdoc, self.config[feed].get('static', s))
+            self.parse_file_fail(feed, static[s], fullpath, 'static')
+        return static
 
     def parse_files_concurrent(self, feed, filepath, workers, with_push=False):
         pool = []
@@ -380,9 +406,9 @@ class Ingestor:
 
 
     def parse_merge(self, feed, fullpath):
-        root = etree.parse(fullpath)
-        group = self.get_xpath_check(root, self.config[feed].get('merge', 'group'))
-        order = self.get_xpath_check(root, self.config[feed].get('merge', 'order'))
+        xdoc = etree.parse(fullpath)
+        group = self.get_xpath_check(xdoc, self.config[feed].get('merge', 'group'))
+        order = self.get_xpath_check(xdoc, self.config[feed].get('merge', 'order'))
         return {'group': group, 'order': order, 'file': fullpath}
 
     def parse_merges_concurrent(self, feed, filepath, workers):

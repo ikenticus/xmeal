@@ -1,0 +1,12 @@
+[settings]
+feeds = xmlteam,fss,odf
+actions = pull,sort,parse,push
+tempdir = temp/
+debug = True
+
+[odbc]
+SportsEditDB = DSN=%s;UID=%s;PWD=%s
+
+[tables]
+SportsEditDB.dbo.temp_SMG_Scores = event_key,team_key,column,value
+SportsEditDB.dbo.temp_SMG_Schedules = league_key,season_key,sub_season_type,event_key,event_status,away_team_key,home_team_key,start_date_time
