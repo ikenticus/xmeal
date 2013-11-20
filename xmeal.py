@@ -48,7 +48,7 @@ class Ingestor:
                 self.show_help()
             elif args[1].endswith('.cf'):
                 self.cfname = args[1]
-                sys.stderr.write('Reading from alternate config: %s\n' % self.cfname)
+                sys.stderr.write('%s Reading from alternate config: %s\n' % (self.get_stamp(), self.cfname))
             else:
                 actions = args[1]
 
@@ -62,7 +62,7 @@ class Ingestor:
             for feed in self.feeds.split(','):
                 self.config_clone(feed)
         else:
-            sys.stderr.write('Config file [%s] not found!\n' % self.cfname)
+            sys.stderr.write('%s Config file [%s] not found!\n' % (self.get_stamp(), self.cfname))
             sys.exit(2)
 
         if actions:
@@ -81,6 +81,7 @@ class Ingestor:
         sort         separates all the pulled files into classifier folders
         parse        extracts all the data from the sorted files based on the rules
         push         insert all the parsed data into the db, initiating any load sprocs
+        purge        deletes all the files in the skipped and failed folders
         parse,push   multiple actions can be specified comma-delimited
         \n    If not action specified, will execute default settings stored in %s
         \n''' % (self.cmd, self.cfname))
@@ -112,7 +113,7 @@ class Ingestor:
         for pool in range(0, self.max_conns):
             conn = pyodbc.connect(self.config['base'].get('odbc', dsn), autocommit=True)
             if self.debug:
-                sys.stderr.write('[%s] Opened pool connection %d\n' % (dsn, pool))
+                sys.stderr.write('%s [%s] Opened pool connection %d\n' % (self.get_stamp(), dsn, pool))
             self.dbpool[dsn].append(conn)
 
     def db_execute(self, dsn, sql, params=[]):
@@ -158,6 +159,9 @@ class Ingestor:
         else:
             url = conf.get('settings', 'site') + conf.get('settings', 'path') + last
             return requests.get(url, headers=headers)
+
+    def get_stamp(self):
+        return datetime.now().strftime('%Y/%m/%d %H:%M:%S')
 
     def get_workers(self, feed, section='settings'):
         max_workers = 0
@@ -205,7 +209,7 @@ class Ingestor:
 
     def pull_file(self, feed, file):
         if self.debug:
-            sys.stderr.write('[%s] Saving %s\n' % (feed, file))
+            sys.stderr.write('%s [%s] Saving %s\n' % (self.get_stamp(), feed, file))
         with open('%s%s/%s' % (self.tempdir, feed, os.path.basename(file)), 'wb') as handle:
             for block in self.get_site(self.config[feed], stream=file).iter_content(1024):
                 if not block:
@@ -219,7 +223,7 @@ class Ingestor:
         while page:
             cnt += 1
             if self.debug:
-                sys.stderr.write('[%s] Retrieving file list page %d\n' % (feed, cnt))
+                sys.stderr.write('%s [%s] Retrieving file list page %d\n' % (self.get_stamp(), feed, cnt))
             if page == 'start':
                 data.append(self.get_site(self.config[feed], last).text)
             else:
@@ -233,16 +237,17 @@ class Ingestor:
         patt = self.config[feed].get('settings', 'list')
         files = re.findall(patt, data)
         if len(files) == 0:
-            sys.stderr.write('[%s] No new files to retrieve\n' % feed)
+            sys.stderr.write('%s [%s] No new files to retrieve\n' % (self.get_stamp(), feed))
         else:
             max_workers = self.get_workers(feed)
             if max_workers > 1:
                 if self.debug:
-                    sys.stderr.write('[%s] Retrieving files concurrently with %d workers\n' % (feed, max_workers))
+                    sys.stderr.write('%s [%s] Retrieving files concurrently with %d workers\n'
+                        % (self.get_stamp(), feed, max_workers))
                 self.pull_files_concurrent(feed, files, data, max_workers)
             else:
                 if self.debug:
-                    sys.stderr.write('[%s] Retrieving files individually\n' % feed)
+                    sys.stderr.write('%s [%s] Retrieving files individually\n' % (self.get_stamp(), feed))
                 self.pull_files_single(feed, files, data)
 
     def pull_files_concurrent(self, feed, files, data, workers):
@@ -266,15 +271,15 @@ class Ingestor:
             cls = self.get_xpath_check(xdoc, self.config[feed].get(self.config[feed].get('settings', 'classify'), 'xpath'))
             if cls in drop:
                 if self.debug:
-                    sys.stderr.write('[%s] Dropping %s\n' % (feed, file))
+                    sys.stderr.write('%s [%s] Dropping %s\n' % (self.get_stamp(), feed, file))
                 os.remove(fullpath)
             elif cls in keep:
                 if self.debug:
-                    sys.stderr.write('[%s] Classifying %s\n' % (feed, file))
+                    sys.stderr.write('%s [%s] Classifying %s\n' % (self.get_stamp(), feed, file))
                 os.rename(fullpath, feedpath + cls + '/' + file)
             else:
                 if self.debug:
-                    sys.stderr.write('[%s] Skipping %s\n' % (feed, file))
+                    sys.stderr.write('%s [%s] Skipping %s\n' % (self.get_stamp(), feed, file))
                 os.rename(fullpath, feedpath + 'skipped/' + file)
 
     def sort_files(self, feed):
@@ -285,16 +290,17 @@ class Ingestor:
             self.config_path(feedpath + cls)
         files = os.listdir(feedpath)
         if len(files) == 0:
-            sys.stderr.write('[%s] No files to classify\n' % feedpath)
+            sys.stderr.write('%s [%s] No files to classify\n' % (self.get_stamp(), feedpath))
         else:
             max_workers = self.get_workers(feed)
             if max_workers > 1:
                 if self.debug:
-                    sys.stderr.write('[%s] Classifying files concurrently with %d workers\n' % (feed, max_workers))
+                    sys.stderr.write('%s [%s] Classifying files concurrently with %d workers\n'
+                        % (self.get_stamp(), feed, max_workers))
                 self.sort_files_concurrent(feed, files, keep, drop, feedpath)
             else:
                 if self.debug:
-                    sys.stderr.write('[%s] Classifying files individually\n' % feed)
+                    sys.stderr.write('%s [%s] Classifying files individually\n' % (self.get_stamp(), feed))
                 self.sort_files_single(feed, files, keep, drop, feedpath)
 
     def sort_files_concurrent(self, feed, files, keep, drop, feedpath):
@@ -315,13 +321,14 @@ class Ingestor:
             self.config[feed].read(conf)
             if max_workers > 1:
                 if self.debug:
-                    sys.stderr.write('[%s] Parsing files concurrently with %d workers\n' % (feed, max_workers))
+                    sys.stderr.write('%s [%s] Parsing files concurrently with %d workers\n'
+                        % (self.get_stamp(), feed, max_workers))
                 if 'merge' in self.config[feed].sections():
                     self.parse_class_latest(feed, self.parse_merges_concurrent(feed, feedpath + cls, max_workers), feedpath + cls)
                 self.parse_files_concurrent(feed, feedpath + cls, max_workers, with_push)
             else:
                 if self.debug:
-                    sys.stderr.write('[%s] Parsing files individually\n' % feed)
+                    sys.stderr.write('%s [%s] Parsing files individually\n' % (self,get_stamp(), feed))
                 if 'merge' in self.config[feed].sections():
                     self.parse_class_latest(feed, self.parse_merges_single(feed, feedpath + cls), feedpath + cls)
                 self.parse_files_single(feed, feedpath + cls, with_push)
@@ -336,7 +343,7 @@ class Ingestor:
             filepath = '%s/%s' % (fullpath, file)
             if filepath not in keepers:
                 if self.debug:
-                    sys.stderr.write('[%s] Removing outdated %s\n' % (feed, file))
+                    sys.stderr.write('%s [%s] Removing outdated %s\n' % (self.get_stamp(), feed, file))
                 os.remove(filepath)
 
     def parse_classes(self, feed, with_push=False):
@@ -344,16 +351,17 @@ class Ingestor:
         feedpath = self.tempdir + feed + '/'
         classes = self.get_classes(feed, 'keep')
         if len(classes) == 0:
-            sys.stderr.write('[%s] No classes to parse\n' % feedpath)
+            sys.stderr.write('%s [%s] No classes to parse\n' % (self.get_stamp(), feedpath))
         else:
             max_workers = self.get_workers(feed)
             if max_workers > 1:
                 if self.debug:
-                    sys.stderr.write('[%s] Parsing classes concurrently with %d workers\n' % (feed, max_workers))
+                    sys.stderr.write('%s [%s] Parsing classes concurrently with %d workers\n'
+                        % (self.get_stamp(), feed, max_workers))
                 self.parse_classes_concurrent(feed, classes, feedpath, with_push)
             else:
                 if self.debug:
-                    sys.stderr.write('[%s] Parsing classes individually\n' % feed)
+                    sys.stderr.write('%s [%s] Parsing classes individually\n' % i(self.get_stamp(), feed))
                 self.parse_classes_single(feed, classes, feedpath, with_push)
 
     def parse_classes_concurrent(self, feed, classes, feedpath, with_push=False):
@@ -369,7 +377,7 @@ class Ingestor:
     def parse_file(self, feed, fullpath, with_push=False):
         static = {}
         if self.debug:
-            sys.stderr.write('[%s] Parsing %s\n' % (feed, fullpath))
+            sys.stderr.write('%s [%s] Parsing %s\n' % (self.get_stamp(), feed, fullpath))
         xdoc = etree.parse(fullpath)
         static =  self.parse_file_static(feed, fullpath)
         steps = [ s for s in self.config[feed].sections() if re.match('\d',s) ]
@@ -379,7 +387,7 @@ class Ingestor:
             for fail in self.config[feed].get('settings', 'fail').split(','):
                 if value and fail in value:
                     if self.debug:
-                        sys.stderr.write('[%s] Failed %s check: %s\n' % (feed, desc, file))
+                        sys.stderr.write('%s [%s] Failed %s check: %s\n' % (self.get_stamp(), feed, desc, file))
                     os.rename(file, '%s%s/failed/%s' % (self.tempdir,
                         file.replace(self.tempdir, '').split('/')[0], os.path.basename(file)))
 
@@ -395,7 +403,7 @@ class Ingestor:
             for file in os.listdir(filepath):
                 pool.append(e.submit(self.parse_file, feed, filepath + '/' + file, with_push))
             if len(pool) == 0:
-                sys.stderr.write('[%s] No files to parse\n' % feedpath)
+                sys.stderr.write('%s [%s] No files to parse\n' % (self.get_stamp(), feedpath))
             pprint ([ p.result() for p in pool ])
 
     def parse_files_single(self, feed, filepath, with_push=False):
@@ -417,7 +425,7 @@ class Ingestor:
             for file in os.listdir(filepath):
                 pool.append(e.submit(self.parse_merge, feed, filepath + '/' + file))
             if len(pool) == 0:
-                sys.stderr.write('[%s] No files to parse\n' % feedpath)
+                sys.stderr.write('%s [%s] No files to parse\n' % (self.get_stamp(), feedpath))
             return [ p.result() for p in pool ]
 
     def parse_merges_single(self, feed, filepath):
@@ -425,6 +433,15 @@ class Ingestor:
         for file in os.listdir(filepath):
             pool.append(self.parse_merge(feed, filepath + '/' + file))
         return pool
+
+
+    def purge_files(self, feed):
+        for subdir in ['skipped', 'failed']:
+            fullpath = self.tempdir + feed + '/' + subdir + '/'
+            for file in os.listdir(fullpath):
+                if self.debug:
+                    sys.stderr.write('%s [%s] Deleting %s file: %s\n' % (self.get_stamp(), feed, subdir, file))
+                os.remove('%s%s' % (fullpath, file))
 
 
     def process_feed(self, feed):
@@ -438,22 +455,25 @@ class Ingestor:
             self.parse_classes(feed, with_push='push' in actions)
         if 'push' in actions:
             self.push_tables(feed, with_parse='parse' in actions)
+        if 'purge' in actions:
+            self.purge_files(feed)
         if 'pull' in actions:
             self.write_last(feed)
 
     def process_feeds(self):
         feeds = self.feeds.split(',')
         if len(feeds) == 0:
-            sys.stderr.write('No feeds to process\n')
+            sys.stderr.write('%s No feeds to process\n' % self.get_stamp())
         else:
             max_workers = self.get_workers('base')
             if max_workers > 1:
                 if self.debug:
-                    sys.stderr.write('Processing feeds concurrently with %d workers\n' % max_workers)
+                    max_workers = len(feeds)
+                    sys.stderr.write('%s Processing feeds concurrently with %d workers\n' % (self.get_stamp(), max_workers))
                 self.process_feeds_concurrent(feeds)
             else:
                 if self.debug:
-                    sys.stderr.write('Processing feeds individually\n')
+                    sys.stderr.write('%s Processing feeds individually\n' % (self.get_stamp()))
                 self.process_feeds_single(feeds)
 
     def process_feeds_concurrent(self, feeds):

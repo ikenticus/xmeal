@@ -3,6 +3,7 @@ feeds = comma-delimited list of feeds (should match conf/feeds/<feed>.cf)
 actions = pull,sort,parse,push
 tempdir = <dir>/ where all temp files will be stored
 ;debug = True   #uncomment to enable debugging stderr output
+max_workers = # (1+: anything > 1 will use a thread for each feed listed above)
 
 [odbc]
 <database> = DSN=%s;UID=%s;PWD=%s (DSN should match odbc.ini [section])
