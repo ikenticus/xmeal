@@ -25,16 +25,6 @@ class Ingestor:
         self.config = {}
         self.tables = {}
 
-        '''
-            self.tables = {
-                'dbo.SMG_Table': {
-                    'static': {},
-                    'columns': [],
-                    'rows': [{}]
-                }
-            }
-        '''
-
         # retrieve conf file using current script name
         cfdir = os.path.dirname(args[0])
         if cfdir:
@@ -315,7 +305,7 @@ class Ingestor:
             self.sort_file(keep, drop, feedpath, file)
 
 
-    def parse_class(self, feed, cls, feedpath, with_push=False):
+    def parse_class(self, feed, cls, feedpath):
         conf = '%s%s/%s.cf' % (self.conf, self.config[feed].get('settings', 'classify'), cls)
         max_workers = self.get_workers(feed)
         if os.path.isfile(conf):
@@ -327,13 +317,13 @@ class Ingestor:
                         % (self.get_stamp(), feed, max_workers))
                 if 'merge' in self.config[feed].sections():
                     self.parse_class_latest(feed, self.parse_merges_concurrent(feed, feedpath + cls, max_workers), feedpath + cls)
-                self.parse_files_concurrent(feed, feedpath + cls, max_workers, with_push)
+                self.parse_files_concurrent(feed, feedpath + cls, max_workers)
             else:
                 if self.debug:
-                    sys.stderr.write('%s [%s] Parsing files individually\n' % (self,get_stamp(), feed))
+                    sys.stderr.write('%s [%s] Parsing files individually\n' % (self.get_stamp(), feed))
                 if 'merge' in self.config[feed].sections():
                     self.parse_class_latest(feed, self.parse_merges_single(feed, feedpath + cls), feedpath + cls)
-                self.parse_files_single(feed, feedpath + cls, with_push)
+                self.parse_files_single(feed, feedpath + cls)
 
     def parse_class_latest(self, feed, filelist, fullpath):
         keep = {}
@@ -348,7 +338,7 @@ class Ingestor:
                     sys.stderr.write('%s [%s] Removing outdated %s\n' % (self.get_stamp(), feed, file))
                 os.remove(filepath)
 
-    def parse_classes(self, feed, with_push=False):
+    def parse_classes(self, feed):
         self.config[feed].read('%sfeeds/%s.cf' % (self.conf, feed))
         feedpath = self.tempdir + feed + '/'
         classes = self.get_classes(feed, 'keep')
@@ -360,30 +350,48 @@ class Ingestor:
                 if self.debug:
                     sys.stderr.write('%s [%s] Parsing classes concurrently with %d workers\n'
                         % (self.get_stamp(), feed, max_workers))
-                self.parse_classes_concurrent(feed, classes, feedpath, with_push)
+                self.parse_classes_concurrent(feed, classes, feedpath)
             else:
                 if self.debug:
-                    sys.stderr.write('%s [%s] Parsing classes individually\n' % i(self.get_stamp(), feed))
-                self.parse_classes_single(feed, classes, feedpath, with_push)
+                    sys.stderr.write('%s [%s] Parsing classes individually\n' % (self.get_stamp(), feed))
+                self.parse_classes_single(feed, classes, feedpath)
 
-    def parse_classes_concurrent(self, feed, classes, feedpath, with_push=False):
+    def parse_classes_concurrent(self, feed, classes, feedpath):
         with futures.ThreadPoolExecutor(max_workers = len(classes)) as e:
             for cls in classes:
-                e.submit(self.parse_class, feed, cls, feedpath, with_push)
+                e.submit(self.parse_class, feed, cls, feedpath)
 
-    def parse_classes_single(self, feed, classes, feedpath, with_push=False):
+    def parse_classes_single(self, feed, classes, feedpath):
         for cls in classes:
-            self.parse_class(feed, cls, feedpath, with_push)
+            self.parse_class(feed, cls, feedpath)
 
 
-    def parse_file(self, feed, fullpath, with_push=False):
+    def parse_file(self, feed, fullpath):
         static = {}
         if self.debug:
             sys.stderr.write('%s [%s] Parsing %s\n' % (self.get_stamp(), feed, fullpath))
         xdoc = etree.parse(fullpath)
         static =  self.parse_file_static(feed, fullpath)
-        steps = [ s for s in self.config[feed].sections() if re.match('\d',s) ]
-        print static
+        steps = [ s for s in self.config[feed].sections() if re.match('\d', s) ]
+        print steps
+        for step in steps:
+            print self.config[feed].get(s, '_table')
+            print self.config['base'].options(self.config[feed].get(s, '_table'))
+            if ' ' in step:
+                print 'conditional parse'
+            else:
+                print 'global parse'
+        #return static
+
+        '''
+            self.tables = {
+                'dbo.SMG_Table': {
+                    'static': {},
+                    'columns': [],
+                    'rows': [{}]
+                }
+            }
+        '''
 
     def parse_file_fail(self, feed, value, file, desc='unknown'):
         if 'fail' in self.config[feed].options('settings'):
@@ -402,19 +410,19 @@ class Ingestor:
             self.parse_file_fail(feed, static[s], fullpath, 'static')
         return static
 
-    def parse_files_concurrent(self, feed, filepath, workers, with_push=False):
+    def parse_files_concurrent(self, feed, filepath, workers):
         pool = []
         with futures.ThreadPoolExecutor(max_workers = workers) as e:
             for file in os.listdir(filepath):
-                pool.append(e.submit(self.parse_file, feed, filepath + '/' + file, with_push))
+                pool.append(e.submit(self.parse_file, feed, filepath + '/' + file))
             if len(pool) == 0:
                 sys.stderr.write('%s [%s] No files to parse\n' % (self.get_stamp(), feedpath))
             pprint ([ p.result() for p in pool ])
 
-    def parse_files_single(self, feed, filepath, with_push=False):
+    def parse_files_single(self, feed, filepath):
         pool = []
         for file in os.listdir(filepath):
-            pool.append(self.parse_file(feed, filepath + '/' + file, with_push))
+            pool.append(self.parse_file(feed, filepath + '/' + file))
         pprint (pool)
 
 
@@ -457,9 +465,19 @@ class Ingestor:
         if 'sort' in actions:
             self.sort_files(feed)
         if 'parse' in actions:
-            self.parse_classes(feed, with_push='push' in actions)
-        if 'push' in actions:
-            self.push_tables(feed, with_parse='parse' in actions)
+            self.parse_classes(feed)
+        if 'post' in actions or 'push' in actions or 'cache' in actions:
+            if not self.tables:
+                self.load_tables(feed)
+            if 'post' in actions:
+                self.post_tables(feed)
+            if 'push' in actions:
+                self.push_tables(feed)
+            if 'cache' in actions:
+                self.cache_tables(feed)
+        else:
+            if self.tables:
+                self.save_tables(feed)
         if 'purge' in actions:
             self.purge_files(feed)
         if 'pull' in actions:
