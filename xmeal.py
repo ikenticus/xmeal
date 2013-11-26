@@ -81,6 +81,8 @@ class Ingestor:
         sort         separates all the pulled files into classifier folders
         parse        extracts all the data from the sorted files based on the rules
         push         insert all the parsed data into the db, initiating any load sprocs
+        post         instead of directly pushing to db, utilize API to POST data
+        cache        push all parsed data to specified cache mechanism via template
         purge        deletes all the files in the skipped and failed folders
         parse,push   multiple actions can be specified comma-delimited
         \n    If not action specified, will execute default settings stored in %s
@@ -381,6 +383,7 @@ class Ingestor:
         xdoc = etree.parse(fullpath)
         static =  self.parse_file_static(feed, fullpath)
         steps = [ s for s in self.config[feed].sections() if re.match('\d',s) ]
+        print static
 
     def parse_file_fail(self, feed, value, file, desc='unknown'):
         if 'fail' in self.config[feed].options('settings'):
@@ -392,6 +395,8 @@ class Ingestor:
                         file.replace(self.tempdir, '').split('/')[0], os.path.basename(file)))
 
     def parse_file_static(self, feed, fullpath):
+        static = {}
+        xdoc = etree.parse(fullpath)
         for s in self.config[feed].options('static'):
             static[s] = self.get_xpath_check(xdoc, self.config[feed].get('static', s))
             self.parse_file_fail(feed, static[s], fullpath, 'static')
