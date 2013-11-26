@@ -174,7 +174,10 @@ class Ingestor:
 
     def get_xpath_safe(self, xdoc, xpath):
         try:
-            return xdoc.xpath(xpath)[0]
+            if len(xdoc.xpath(xpath)) == 1:
+                return xdoc.xpath(xpath)[0]
+            else:
+                return xdoc.xpath(xpath)
         except:
             return None
 
@@ -372,26 +375,19 @@ class Ingestor:
             sys.stderr.write('%s [%s] Parsing %s\n' % (self.get_stamp(), feed, fullpath))
         xdoc = etree.parse(fullpath)
         static =  self.parse_file_static(feed, fullpath)
-        steps = [ s for s in self.config[feed].sections() if re.match('\d', s) ]
-        print steps
+        steps = [ s for s in self.config[feed].sections() if re.match('\d+', s) ]
         for step in steps:
-            print self.config[feed].get(s, '_table')
-            print self.config['base'].options(self.config[feed].get(s, '_table'))
+            table = self.config[feed].get(step, '_table')
+            cols = self.config['base'].options(table)
+            root = self.get_xpath_check(xdoc, self.config[feed].get(step, '_root'))
+            #keys = [ k for k in self.config[feed].options(s) if not k.startswith('_') ]
+            self.upsert_table(feed, table, cols, True)
             if ' ' in step:
-                print 'conditional parse'
+                rule = step.split(' ')[1].split('=')
+                if static[rule[0]].lower() == rule[1]:
+                    self.build_tables(feed, step, table, cols, static, root)
             else:
-                print 'global parse'
-        #return static
-
-        '''
-            self.tables = {
-                'dbo.SMG_Table': {
-                    'static': {},
-                    'columns': [],
-                    'rows': [{}]
-                }
-            }
-        '''
+                self.build_tables(feed, step, table, cols, static, root)
 
     def parse_file_fail(self, feed, value, file, desc='unknown'):
         if 'fail' in self.config[feed].options('settings'):
@@ -411,19 +407,13 @@ class Ingestor:
         return static
 
     def parse_files_concurrent(self, feed, filepath, workers):
-        pool = []
         with futures.ThreadPoolExecutor(max_workers = workers) as e:
             for file in os.listdir(filepath):
-                pool.append(e.submit(self.parse_file, feed, filepath + '/' + file))
-            if len(pool) == 0:
-                sys.stderr.write('%s [%s] No files to parse\n' % (self.get_stamp(), feedpath))
-            pprint ([ p.result() for p in pool ])
+                e.submit(self.parse_file, feed, filepath + '/' + file)
 
     def parse_files_single(self, feed, filepath):
-        pool = []
         for file in os.listdir(filepath):
-            pool.append(self.parse_file(feed, filepath + '/' + file))
-        pprint (pool)
+            self.parse_file(feed, filepath + '/' + file)
 
 
     def parse_merge(self, feed, fullpath):
@@ -509,6 +499,84 @@ class Ingestor:
             self.process_feed(feed)
 
 
+
+    def build_tables(self, feed, step, table, cols, static, root):
+        if isinstance(root, list):
+            for item in root:
+                self.build_table(feed, step, table, cols, static, item)
+        else:
+            self.build_table(feed, step, table, cols, static, root)
+
+    def build_table(self, feed, step, table, cols, static, root):
+        vals = []
+        for col in cols:
+            if col in static.keys():
+                val = static[col]
+            elif col in self.config[feed].options(step):
+                xpath = self.config[feed].get(step, col)
+                if (xpath.startswith('"') and xpath.endswith('"')) or (xpath.startswith("'") and xpath.endswith("'")):
+                    val = xpath[1:-1]
+                else:
+                    val = self.get_xpath_check(root, xpath)
+            else:
+                val = None
+            vals.append(val)
+        self.upsert_table(feed, table, vals)
+
+    def cache_tables(self, feed):
+        return
+
+    def load_tables(self, feed):
+        return
+
+    def post_site(self, url, data):
+        response = requests.post(url, data=data)
+        return response.text
+
+    def post_tables(self, feed):
+        sql = ''
+        for name in self.tables[feed]:
+            if self.debug:
+                sys.stderr.write('%s [%s] Posting %s\n' % (self.get_stamp(), feed, name))
+            table = self.tables[feed][name]
+            for row in table:
+                if table.index(row) == 0:
+                    sql = '%s ([%s]) VALUES\n' % (name, '], ['.join(row))
+                else:
+                    sql += "('%s')" % "', '".join(row)
+                    if table.index(row) < len(table)-1:
+                        sql += ',\n'
+        if name in self.config['base'].options('post'):
+            self.post_site(self.config['base'].get('post', name), data=sql)
+        elif 'baseurl' in self.config['base'].options('post'):
+            self.post_site(self.config['base'].get('post', 'baseurl') + name, data=sql)
+        else:
+            sys.stderr.write('%s [%s] [post] section does not contain option for baseurl or %s!\n' % (self.get_stamp(), feed, name))
+        return
+
+    def push_tables(self, feed):
+        return
+
+    def save_tables(self, feed):
+        return
+
+    def upsert_table(self, feed, table, values, is_head=False):
+        if feed not in self.tables:
+            self.tables[feed] = {}
+        if table not in self.tables[feed]:
+            if is_head:
+                self.tables[feed][table] = [ values ]
+        else:
+            if not is_head:
+                self.tables[feed][table].append(values)
+        ''' all other cases gets ignored '''
+
+
+
 if __name__ == "__main__":
     tool = Ingestor(sys.argv)
     tool.process_feeds()
+
+    #pprint (tool.tables)
+
+
