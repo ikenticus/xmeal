@@ -1,19 +1,37 @@
 [settings]
-name = Title Case Friendly Feed Name
+; Title Case Friendly Feed Name
+name = Feed1
+; base site and path to retrieve latest feed listings from
 site = http://feed.url.com
 path = /url/path/to/feed
+; credentials to feed, if needed
 user = <username>
 pass = <password>
-list = regex pattern for file list to generate url-path for file retrieval
-page = regex pattern for next page (if any) to generate url for file retrieval
-classify = name of classifier (i.e. fixtures)
-fail = comma-delilmited list of failure patterns
+; for HTML feed listing, regex patterns must be specified for:
+;   list = regex pattern for file list to generate url-path for file retrieval
+;   page = regex pattern for next page (if any) to generate url for file retrieval
+list = file"\shref="([^"]+)">
+page = folder'\shref='([^']+)'>
+; name of classifier (i.e. fixtures), will require a conf/fixtures directory with <fixture>.cf files
+classify = fixtures
+; comma-delilmited list of failure patterns
+fail = ..,--
+; strftime format for last update parameter used in feed listing url, used in last_<feed> file
 last = ?last_modified=%Y%m%d-datestamp
-last_default = # period ago (i.e. 1 day ago, 4 hours ago, etc)
-max_workers = # of concurrent threads for processing this particular feed
-max_pool = # of connection pool size for this particular feed
+; default last datestamp when last_<feed> file is not found, 
+last_default = 1 hours ago
+; number of concurrent threads for processing this particular feed
+max_workers = 4
+; number of connection pool size for this particular feed
+max_pool = 8
 
-[<classifier>]
-xpath = xpath/to/obtain/@classifier
-drop = comma-delimited list of <classifiers> to delete permanently
-keep = comma-delimited list of <classifiers> to process (should match files: <tempdir>/<classifier>/<keep>.cf)
+; section for classifier defined above
+;[<classifier>]
+;xpath = xpath/to/obtain/@classifier
+;drop = comma-delimited list of <classifiers> to delete permanently
+;keep = comma-delimited list of <classifiers> to process (should match files: <tempdir>/<classifier>/<keep>.cf)
+[fixtures]
+xpath = standings/metadata/@fixture-key
+drop = heartbeat,odds
+keep = statistics,standings,schedules
+

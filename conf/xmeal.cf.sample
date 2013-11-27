@@ -1,12 +1,30 @@
 [settings]
-feeds = comma-delimited list of feeds (should match conf/feeds/<feed>.cf)
-actions = pull,sort,parse,push,post,purge,cache
-tempdir = <dir>/ where all temp files will be stored
-;debug = True   #uncomment to enable debugging stderr output
-max_workers = # (1+: anything > 1 will use a thread for each feed listed above)
+; comma-delimited list of feeds (should match conf/feeds/<feed>.cf)
+feeds = feed1,feed2
+; comma-delimited list of actions to perform: pull,sort,parse,push,post,purge,cache
+actions = pull,sort,parse,post,purge
+; temporary <dir>/ where all temp files will be stored
+tempdir = temp/
+; uncomment to enable debugging to stderr
+;debug = True
+; number of max_workers (1+: anything > 1 will use a thread for each feed listed above)
+max_workers = 8
 
 [odbc]
-<database> = DSN=%s;UID=%s;PWD=%s (DSN should match odbc.ini [section])
+; ODBC databases used by ingestor (DSN should match odbc.ini [section])
+;<database> = DSN=%s;UID=%s;PWD=%s
+
+[post]
+; list all tables and their post urls
+;TEST_Scores = http://servername/fullpath/TEST_Scores
+; or the baseurl to which the table name will be appended (ending with /)
+;baseurl = http://servername/fullpath/
 
 [tables]
-database.dbo.table = column1,...,columnN (database should match [odbc] options above)
+; list of tables used by ingestor and their fully-qualified dbo identifier
+;TEST_Scores = WhichDB.dbo.temp_TEST_Scores
+
+; list all table names in their own section, followed by their columns with their castings
+;[TEST_Scores]
+;char_key = VARCHAR(100)
+;int_id = INT

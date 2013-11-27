@@ -1,14 +1,34 @@
 [merge]
-group = xpath to key used to group files to merge
-order = xpath to value (usually date/time stamp) used to determine order to merge
+; xpath to key used to group files to merge
+group = game/metadata/@game-key
+; xpath to value (usually date/time stamp) used to determine order to merge
+order = game/metadata/@date-time
 
 [static]
-<static_key> = xpath/to/@attribute,xpath/to/@backup
+; commai-delimited list of static variables and their xpaths (first valid xpath will be used)
+game = game/metadata/@game-key,game/tournament/metadata/@game-key
+when = game/metadata/@date-time
+
+; create a section for each parsing step
+;[000]
+;_table = 3-part table name to insert this section into (much match [tables] in conf/ingestor.cf)
+;_root = root xpath to iterate this section
+;<column> = relative xpath to attribute from _root (multiple, should match [table] columns)
+;
+; for steps that have a conditional based upon a static variable listed above:
+;[001 static=value]
 
 [000]
-_table = 3-part table name to insert this section into (much match [tables] in conf/ingestor.cf)
-_root = root xpath to iterate this section
-<column> = relative xpath to attribute from _root (multiple, should match [table] columns)
+_table = TEST_Scores
+_root = game/team/stats/score
+team_key = ../../metadata/@key
+period = @period
+value = @score
 
-[001 static=slugvalue]
-; similar to [000] above but only runs if static-var = slugified(value)
+[001 sport_name=baseball]
+_table = TEST_Scores
+_root = game/team/stats/baseball/offensive
+team_key = ../../../metadata/@key
+period = "hits"
+value = @hits
+
