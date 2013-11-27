@@ -46,7 +46,7 @@ SQL>
 
 $ sudo cp /opt/local/etc/odbc.ini /etc/odbc.ini
 $ sudo cp /opt/local/etc/odbcinst.ini /etc/odbcinst.ini
-$ pip install pyodbc lxml requests futures
+$ pip install pyodbc lxml requests futures jinja2
 $ python
 ```
 ActivePython 2.7.5.6 (ActiveState Software Inc.) based on
@@ -85,6 +85,11 @@ Type "help", "copyright", "credits" or "license" for more information.
 [0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225, 256, 289, 324, 361]
 
 >>> ^D
+
+>>> from jinja2 import Template
+>>> template = Template('Hello {{ name }}!')
+>>> template.render(name='World')
+u'Hello World!'
 ```
 
 

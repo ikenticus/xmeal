@@ -13,6 +13,7 @@ import requests
 import ConfigParser
 from lxml import etree
 from pprint import pprint
+from jinja2 import Template
 from threading import Lock, Semaphore
 from datetime import datetime, timedelta
 
@@ -534,22 +535,32 @@ class Ingestor:
         return response.text
 
     def post_tables(self, feed):
-        sql = ''
         for name in self.tables[feed]:
             if self.debug:
                 sys.stderr.write('%s [%s] Posting %s\n' % (self.get_stamp(), feed, name))
             table = self.tables[feed][name]
+            data = ''
+            if os.path.exists('%stpl/%s.tpl' % (self.conf, name)):
+                template = Template(open('%stpl/%s.tpl' % (self.conf, name).read()))
+            elif os.path.exists('%stpl/baseurl.tpl' % self.conf):
+                template = Template(open('%stpl/baseurl.tpl' % self.conf).read())
+            else:
+                sys.stderr.write('%s [%s] [post] template does not exist for baseurl or %s!\n' % (self.get_stamp(), feed, name))
+                return
+            data = template.render(name=name, table=table)
+            '''
             for row in table:
                 if table.index(row) == 0:
-                    sql = '%s ([%s]) VALUES\n' % (name, '], ['.join(row))
+                    data = '%s ([%s]) VALUES\n' % (name, '], ['.join(row))
                 else:
-                    sql += "('%s')" % "', '".join(row)
+                    data += "('%s')" % "', '".join(row)
                     if table.index(row) < len(table)-1:
-                        sql += ',\n'
+                        data += ',\n'
+            '''
         if name in self.config['base'].options('post'):
-            self.post_site(self.config['base'].get('post', name), data=sql)
+            self.post_site(self.config['base'].get('post', name), data=data)
         elif 'baseurl' in self.config['base'].options('post'):
-            self.post_site(self.config['base'].get('post', 'baseurl') + name, data=sql)
+            self.post_site(self.config['base'].get('post', 'baseurl') + name, data=data)
         else:
             sys.stderr.write('%s [%s] [post] section does not contain option for baseurl or %s!\n' % (self.get_stamp(), feed, name))
         return

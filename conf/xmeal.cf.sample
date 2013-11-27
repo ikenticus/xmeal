@@ -15,7 +15,7 @@ max_workers = 8
 ;<database> = DSN=%s;UID=%s;PWD=%s
 
 [post]
-; list all tables and their post urls
+; list all tables and their post urls, also corresponds to the conf/tpl/<table|baseurl>.tpl
 ;TEST_Scores = http://servername/fullpath/TEST_Scores
 ; or the baseurl to which the table name will be appended (ending with /)
 ;baseurl = http://servername/fullpath/
